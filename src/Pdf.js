@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import PDFDocument from 'pdfkit'
-import Circle from './Circle.js'
+import Mold from './Mold.js'
 import MoldPiece from './MoldPiece.js'
 import { val, point, times } from './utils.js'
 
@@ -8,56 +8,66 @@ class PDF {
   constructor (options) {
     this.filename = `drum-mold-pattern-${options.diameter}x${options.height}.pdf`
 
-    // drums diameter is actually 1/8 inch less
-    this.diameter = val(options.diameter - 1/8)
+    // diameter is 1/8 inch less
+    const drumDiameter = options.diameter - 1/8
 
-    this.thickness = val(options.thickness) || val(2)
+    // hoop is made out of 4 layers of 1/8 inch strips
+    const hoopThickness = 1/2
 
-    this.radius = {
-      outer: this.diameter / 2,
-      middle: ((this.diameter - this.thickness / 2) / 2),
-      inner: (this.diameter - this.thickness) / 2
-    }
+    // gap between drum shell and hoop so the hoop can move freely
+    const hoopGap = 5/8
 
-    // mold + drum height in inches
-    this.moldHeight = val(options.height || 14)
+    // the hoop diameter is the outer layer of the four strips
+    const hoopInnerDiameter = drumDiameter + hoopGap + hoopThickness
 
-    // document dimensions
-    this.width = this.diameter
-    this.height = this.diameter
-    this.center = point(this.width / 2, this.height / 2)
+    // the mold for the buckle strap works so the straps are layered
+    // from inner to outer, so the inner diameter doesn't matter but
+    // the outer one does
+    const hoopBuckleThickness = 4
+    const hoopBuckleOuterDiameter = drumDiameter + hoopGap
+    const hoopBuckleInnerDiameter = hoopBuckleOuterDiameter - hoopBuckleThickness
 
-    // circles
-    this.circles = {
-      outer: new Circle({
-        center: this.center,
-        radius: this.radius.outer
+    // these pieces are pushed inwards with a buckle strap around
+    // the buckle inner mold, so their inner diameter should equal
+    // the outer diameter of the hoop
+    const bucklePieceDiameter = hoopInnerDiameter
+
+    this.molds = {
+      shell: new Mold({
+        diameter: options.diameter - 1/8,
+        thickness: options.thickness,
+        height: options.height,
+        color: 'blue'
       }),
-      middle: new Circle({
-        center: this.center,
-        radius: this.radius.middle
+      hoop: new Mold({
+        diameter: hoopInnerDiameter,
+        thickness: options.thickness,
+        height: 2,
+        color: 'red'
       }),
-      inner: new Circle({
-        center: this.center,
-        radius: this.radius.inner
+      hoopBuckleInner: new Mold({
+        diameter: hoopBuckleInnerDiameter,
+        thickness: hoopBuckleThickness,
+        height: 3,
+        color: 'green'
+      }),
+      hoopBuckleOuter: new Mold({
+        diameter: bucklePieceDiameter,
+        thickness: 2,
+        height: 3,
+        color: 'purple'
       })
     }
 
-    this.lines = {
-      count: 16,
-      angle: 360 / 16
-    }
-
-    this.holes = {
-      count: 8,
-      angle: 360 / 8,
-      offset: this.lines.angle * 1.5
-    }
+    this.width = this.molds.shell.diameter
+    this.height = this.molds.shell.diameter
   }
 
-  addPage () {
+  addPage (diameter) {
+    const width = diameter || this.width
+
     this.doc.addPage({
-      size: [this.width, this.height]
+      size: [width, width]
     })
   }
 
@@ -75,23 +85,19 @@ class PDF {
     this.doc.end()
   }
 
-  circle (center, r, color) {
+  drawCircle (center, r, color) {
     return this.doc
       .circle(center.x, center.y, r)
       .stroke(color)
       .lineWidth(1)
   }
 
-  moldCircle (radius) {
-    return this.circle(this.center, radius)
-  }
-
-  holeCircle (point, color) {
+  drawHoleCircle (point, color) {
     const radius = val(0.51 / 2)
-    return this.circle(point, radius, color)
+    return this.drawCircle(point, radius, color)
   }
 
-  line (startPoint, endPoint, color) {
+  drawLine (startPoint, endPoint, color) {
     return this.doc
       .moveTo(startPoint.x, startPoint.y)
       .lineTo(endPoint.x, endPoint.y)
@@ -99,64 +105,89 @@ class PDF {
       .lineWidth(1)
   }
 
-  arc (r, startPoint, endPoint, color) {
+  drawArc (r, startPoint, endPoint, color) {
     return this.doc
       .path(`M${startPoint.x},${startPoint.y} A ${r},${r},0 0 1 ${endPoint.x},${endPoint.y}`)
       .stroke(color)
   }
 
-  drawLines (color) {
-    const { count, angle } = this.lines
-    const { outer, inner } = this.circles
-    const center = this.center
-    const line = this.line.bind(this)
+  drawLines (mold, color) {
+    const { count, angle } = mold.lines
+    const { outer, inner } = mold.circles
+    const center = mold.center
+    const drawLine = this.drawLine.bind(this)
     times(count)(i => {
       const lineAngle = angle * i
       const endPoint = outer.point(lineAngle)
-      line(center, endPoint, color)
+      drawLine(center, endPoint, color)
     })
   }
 
-  drawHoles (color) {
-    const { count, angle, offset } = this.holes
-    const { middle } = this.circles
-    const holeCircle = this.holeCircle.bind(this)
+  drawHoles (mold, color) {
+    const { count, angle, offset } = mold.holes
+    const { middle } = mold.circles
+    const drawHoleCircle = this.drawHoleCircle.bind(this)
 
     times(count)(i => {
       const holeAngle = angle * (i + 1) + offset
       const point = middle.point(holeAngle)
-      holeCircle(point, color)
+      drawHoleCircle(point, color)
     })
   }
 
-  fullPatternPage (color = 'black') {
-    const { inner, outer } = this.radius
+  fullPatternPage (mold, color, addPage = true) {
+    const { inner, outer } = mold.radius
 
-    this.addPage()
+    addPage && this.addPage(mold.diameter)
 
-    this.moldCircle(outer, color)
-    this.moldCircle(inner, color)
-    this.drawLines(color)
-    this.drawHoles(color)
+    this.drawCircle(mold.center, outer, color)
+    this.drawCircle(mold.center, inner, color)
+    this.drawLines(mold, color)
+    this.drawHoles(mold, color)
   }
 
-  moldPiecePage (color = 'blue') {
-    this.addPage()
+  hoopBuckleFullPatternPage () {
+    this.fullPatternPage(this.molds.hoopBuckleOuter, 'purple')
+    this.fullPatternPage(this.molds.hoopBuckleInner, 'green',)
+  }
+
+  moldPiecePage (mold, color, addPage = true) {
+    addPage && this.addPage(mold.diameter)
 
     const piece = new MoldPiece({
-      center: this.center,
-      radius: this.radius,
-      circles: this.circles
+      center: mold.center,
+      radius: mold.radius,
+      circles: mold.circles
     })
 
     this.doc.path(piece.path()).stroke(color)
 
     const holeAngle = 11.25
-    const holePoint1 = this.circles.middle.point(holeAngle)
-    const holePoint2 = this.circles.middle.point(holeAngle + this.lines.angle * 2)
+    const holePoint1 = mold.circles.middle.point(holeAngle)
+    const holePoint2 = mold.circles.middle.point(holeAngle + mold.lines.angle * 2)
 
-    this.holeCircle(holePoint1, color)
-    this.holeCircle(holePoint2, color)
+    this.drawHoleCircle(holePoint1, color)
+    this.drawHoleCircle(holePoint2, color)
+  }
+
+  shellMoldPiecePage () {
+    const mold = this.molds.shell
+    return this.moldPiecePage(mold, mold.color)
+  }
+
+  hoopMoldPiecePage () {
+    const mold = this.molds.hoop
+    return this.moldPiecePage(mold, mold.color)
+  }
+
+  hoopBuckleInnerMoldPiecePage () {
+    const mold = this.molds.hoopBuckleInner
+    return this.moldPiecePage(mold, mold.color)
+  }
+
+  hoopBuckleOuterMoldPiecePage () {
+    const mold = this.molds.hoopBuckleOuter
+    return this.moldPiecePage(mold, mold.color)
   }
 }
 

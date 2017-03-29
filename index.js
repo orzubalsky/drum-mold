@@ -13,6 +13,11 @@ const options = {
 const pdf = new PDF(options)
 
 pdf.start()
-pdf.fullPatternPage()
-pdf.moldPiecePage()
+
+pdf.shellMoldPiecePage()
+pdf.hoopMoldPiecePage()
+pdf.hoopBuckleOuterMoldPiecePage()
+pdf.hoopBuckleInnerMoldPiecePage()
+pdf.hoopBuckleFullPatternPage()
+
 pdf.end()
